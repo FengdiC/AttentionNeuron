@@ -14,10 +14,10 @@ def select_x(x_label,y_label):
     return idx.astype('bool')
 
 def pred_corr(pred,true):
-    n = pred.shape[0]
+    n = pred.shape[1]
     corr = np.zeros(n)
     for i in range(n):
-        corr[i] = pearsonr(pred[i],true[i])[0]
+        corr[i] = pearsonr(pred[:,i],true[:,i])[0]
     return np.mean(corr)
 
 def rdm_both(x_pt,x_im,labels_pt,labels_im):

@@ -1,6 +1,6 @@
 import os
 import sys
-import pickle,json
+import pickle,json,copy
 from itertools import product
 from time import time
 
@@ -24,6 +24,10 @@ from bdpy.distcomp import DistComp
 import god_config as config
 
 from util import rdm,kendall_tau, plot_rdm, pred_corr, select_x
+from sklearn.feature_selection import SelectKBest, f_classif, f_regression
+from sklearn.metrics import explained_variance_score, mean_squared_error,r2_score
+from sklearn.linear_model import Ridge, ElasticNet, Lasso
+from sklearn.model_selection import cross_val_score
 
 def main():
     # Settings ---------------------------------------------------------
@@ -58,7 +62,7 @@ def main():
                                            successive=suc_cols)
 
     # load image
-    image = pickle.load(open('data/image.pkl','rb'))
+    image = pickle.load(open('data/image_comb.pkl','rb'))
     # data_feature = bdpy.BData(image_feature)
     # Add any additional processing to data here
 
@@ -76,6 +80,8 @@ def main():
         print('ROI:        %s' % roi)
         print('Num voxels: %d' % num_voxel[roi])
         print('Feature:    %s' % feat)
+        # with open('tune_result.txt', 'a') as convert_file:
+        #     convert_file.write(sbj+'\t'+roi+'\t'+feat+'\n')
 
         # Distributed computation
         analysis_id = analysis_basename + '-' + sbj + '-' + roi + '-' + feat
@@ -158,12 +164,10 @@ def main():
         # pred_y = pred_y * norm_scale_y + norm_mean_y
 
         # Brain prediction
-        pred_y, true_y = feature_prediction(y_train, x_train,
+        pred_y, true_y,train_r2,portion = feature_prediction(y_train, x_train,
                                             y_test, x_test,
                                             n_voxel=500,
                                             n_iter=n_iter)
-        with open('tune_result.txt', 'a') as convert_file:
-            convert_file.write(sbj+'\t'+roi+'\t'+feat+'\n')
 
         pred_y = pred_y * norm_scale_x + norm_mean_x
         true_y = true_y * norm_scale_x + norm_mean_x
@@ -175,16 +179,22 @@ def main():
         pred_y_av, true_y_av, test_label_set \
             = get_averaged_feature(pred_y, true_y, test_label)
 
+        #compute corr
+        rand_err = mean_squared_error( true_y,np.tile(np.mean(true_y,axis=0),(true_y.shape[0],1)))
+        err = mean_squared_error( true_y,pred_y)
+        print(err,rand_err)
+
+        r2 = explained_variance_score(true_y, pred_y)
+        # r2 = r2_score(true_y, pred_y)
+        # r2 = 1 - (1 - r2) * (y_train.shape[0] - 1) / (y_train.shape[0] - 11 - 1)
+        print("R2: ",train_r2)
+        print(r2)
+
         plt.figure()
         plt.plot(np.arange(pred_y_av.shape[0]),pred_y_av[:,1],label='prediction')
         plt.plot(np.arange(pred_y_av.shape[0]), true_y_av[:,1], label='true')
         plt.legend()
         plt.savefig('brain_pred/'+roi+'_'+feat)
-
-        from sklearn.metrics import r2_score
-        from sklearn.metrics import explained_variance_score
-        r2 = explained_variance_score(true_y, pred_y)
-        corr = pred_corr(pred_y_av,true_y_av)
 
         # Prepare result dataframe
         results = pd.DataFrame({'subject' : [sbj],
@@ -198,8 +208,11 @@ def main():
                                 'true_feature_averaged' : [true_y_av],
                                 'predicted_feature_averaged' : [pred_y_av],
                                 'rsa_rank': [rsa],
-                                'R-square':[r2],
-                                'Corr_brain':[corr]})
+                                'R-square':[train_r2],
+                                'R-square_test': [r2],
+                                'feature_portion': [portion],
+                                'mean_squared_error_random': [rand_err],
+                                'mean_squared_error_brain':[err]})
 
         # Save results
         makedir_ifnot(os.path.dirname(results_file))
@@ -249,8 +262,12 @@ def feature_prediction(x_train, y_train, x_test, y_test, n_voxel=500, n_iter=200
     y_true_list = []
     y_pred_list = []
 
-    cv_score={'s25':0,'s50':0,'s80':0,'s100':0}
-    sparse_score=0
+    # r2_list=[]
+    # dict = {'0':0}#,'1':0,'2':0,'3':0,'4':0}
+    # cv_score={'s20':copy.deepcopy(dict),'s80':copy.deepcopy(dict),'s150':copy.deepcopy(dict),'s200':copy.deepcopy(dict),
+    #           's280':copy.deepcopy(dict)}
+    cv_score = 0
+    best_weight_fit = np.zeros(n_unit)
 
     for i in range(n_unit):
 
@@ -268,54 +285,46 @@ def feature_prediction(x_train, y_train, x_test, y_test, n_voxel=500, n_iter=200
         # x_test_unit = x_test[:, voxel_index]
 
         # # cross validation: check the importance of predictors
-        # numbers = [25,50,80,100]
+        # numbers = [20,80,150,200,280]
+        # alpha=[0.005]
         # for k in numbers:
-        #     from sklearn.feature_selection import SelectKBest, f_classif
-        #     select = SelectKBest(f_classif, k=k)
-        #     x_train_unit = select.fit_transform(x_train, y_train_unit)
-        #     print(k)
-        #     idx = select.get_support()
+        #     for a in range(1):
+        #         select = SelectKBest(f_regression, k=k)
+        #         x_train_unit = select.fit_transform(x_train, y_train_unit)
         #
-        #     # Add bias terms
-        #     x_train_unit = add_bias(x_train_unit, axis=1)
-        #
-        #     from sklearn.model_selection import cross_val_score
-        #     from sklearn.linear_model import Ridge, Lasso,ElasticNet
-        #     model = SparseLinearRegression(n_iter=n_iter, prune_mode=1)
-        #     cv_score['s'+str(k)]+=sum(cross_val_score(model, x_train_unit, y_train_unit, cv=5,
-        #                                                 scoring='neg_mean_squared_error'))
-            # cv_score_1['l'+str(k)] += sum(cross_val_score(lasso, x_train_unit, y_train_unit, cv=5,
-            #                                               scoring='neg_mean_squared_error'))
-            #
-            # ridge = Ridge(alpha=alpha[1])
-            # lasso = Lasso(alpha=alpha[1])
-            # cv_score_2['r' + str(k)] += sum(cross_val_score(ridge, x_train_unit, y_train_unit, cv=5,
-            #                                                 scoring='neg_mean_squared_error'))
-            # cv_score_2['l' + str(k)] += sum(cross_val_score(lasso, x_train_unit, y_train_unit, cv=5,
-            #                                                 scoring='neg_mean_squared_error'))
-            #
-            # ridge = Ridge(alpha=alpha[2])
-            # lasso = Lasso(alpha=alpha[2])
-            # cv_score_3['r' + str(k)] += sum(cross_val_score(ridge, x_train_unit, y_train_unit, cv=5,
-            #                                                 scoring='neg_mean_squared_error'))
-            # cv_score_3['l' + str(k)] += sum(cross_val_score(lasso, x_train_unit, y_train_unit, cv=5,
-            #                                                 scoring ='neg_mean_squared_error'))
+        #         from sklearn.model_selection import cross_val_score
+        #         from sklearn.linear_model import ElasticNet
+        #         model = ElasticNet(alpha=alpha[a])
+        #         cv_score['s'+str(k)][str(a)]+=sum(cross_val_score(model, x_train_unit, y_train_unit, cv=50,
+        #                                                     scoring='explained_variance'))/(50.0*n_unit)
 
         # feature selections
-        from sklearn.feature_selection import SelectKBest, f_classif, f_regression
-        select = SelectKBest(f_classif, k=25)
+        select = SelectKBest(f_regression, k=650)
         x_train_unit = select.fit_transform(x_train, y_train_unit)
-        idx = select.get_support()
-        x_test_unit = x_test[:, idx]
+        x_test_unit = select.transform(x_test)
+
+        #Get feature proportions from three models
+        idx = select.get_support(indices=True)
+        portion =[np.sum(idx<1250)/650.0,np.sum(idx[2500>idx]>1249)/650.0,np.sum(idx>=2500)/650.0]
+        print(portion)
+        best_model = portion.index(max(portion))
+        print(best_model)
+        best_weight_fit[i] = best_model
 
         # Add bias terms
         x_train_unit = add_bias(x_train_unit, axis=1)
         x_test_unit = add_bias(x_test_unit, axis=1)
+
         # Setup regression
         # For quick demo, use linaer regression
-        from sklearn.linear_model import Ridge
-        # model = Ridge(alpha=1.0)
-        model = SparseLinearRegression(n_iter=n_iter, prune_mode=1)
+        model = ElasticNet(alpha=0.005)
+        # model = SparseLinearRegression(n_iter=n_iter, prune_mode=1)
+        # list = cross_val_score(model, x_train_unit, y_train_unit, cv=5,
+        #                                                     scoring='r2')
+        # list = [1-(1-r)*(y_train_unit.shape[0]-1)/(y_train_unit.shape[0]-11-1) for r in list]
+        cv_score += sum(cross_val_score(model, x_train_unit, y_train_unit, cv=5,
+                                                            scoring='explained_variance'))/(5.0*n_unit)
+        # model = Lasso(alpha=0.01)
 
         # Training and test
         try:
@@ -323,9 +332,8 @@ def feature_prediction(x_train, y_train, x_test, y_test, n_voxel=500, n_iter=200
             y_pred = model.predict(x_test_unit)# Test
         except:
             # When SLiR failed, returns zero-filled array as predicted features
+            print("!!!!!!!!!ERROR!!!!!!")
             y_pred = np.zeros(y_test_unit.shape)
-        from sklearn.metrics import mean_squared_error
-        sparse_score+=mean_squared_error(y_test_unit, y_pred)
 
         y_true_list.append(y_test_unit)
         y_pred_list.append(y_pred)
@@ -336,21 +344,11 @@ def feature_prediction(x_train, y_train, x_test, y_test, n_voxel=500, n_iter=200
     y_predicted = np.vstack(y_pred_list).T
     y_true = np.vstack(y_true_list).T
 
-    for key in cv_score.keys():
-        cv_score[key]/=n_unit
-    sparse_score/=n_unit
+    # with open('tune_result.txt', 'a') as convert_file:
+    #     convert_file.write(json.dumps(cv_score))
+    #     convert_file.write('\n')
 
-    with open('tune_result.txt', 'a') as convert_file:
-        convert_file.write(json.dumps(cv_score))
-        convert_file.write('\n')
-        # convert_file.write(json.dumps(cv_score_2))
-        # convert_file.write('\n')
-        # convert_file.write(json.dumps(cv_score_3))
-        # convert_file.write('\n')
-        convert_file.write('sparse_model:'+str(sparse_score))
-        convert_file.write('\n')
-
-    return y_predicted, y_true
+    return y_predicted, y_true,cv_score,best_weight_fit
 
 
 def get_averaged_feature(pred_y, true_y, labels):
