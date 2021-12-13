@@ -6,7 +6,11 @@ This is the repo for the experiment code for CMPUT652 project.
 The human visual system has been shown to be influenced by the attention mechanism. In this paper, we hypothesized that the representations obtained from deep neural networks that utilize the attention mechanism correlate higher to the brain activity in the visual cortex as compared to that of the models without the attention mechanism. We test this hypothesis by empirically evaluating the representations obtained from these models and the brain activity fMRI representations through the use of representational similarity analysis and the encoding models.
 
 ## RDM plots
-![rdm1](/RSA_figs/brain1.png?raw=true "test")
+![rdm1](/RSA_figs/brain1.png?raw=true "")
+![rdm2](/RSA_figs/resnet.png?raw=true "")
+![rdm3](/RSA_figs/seresnet.png?raw=true "")
+![rdm4](/RSA_figs/skresnext.png?raw=true "")
+![rdm5](/RSA_figs/resnest.png?raw=true "")
 
 ## Instructions
 - Install the requirements using `requirements.txt`. Also obtain the
